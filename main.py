@@ -31,87 +31,44 @@ def search_stocks(market: str = "stock"):
     else:
         raise HTTPException(status_code=400, detail="Unsupported market type.")
 
-@app.post("/current_price")
-def get_current_price(req: StockRequest):
-    try:
-        if req.ticker.startswith("KRW-"):
-            df = pyupbit.get_ohlcv(req.ticker, count=30)
-            df = df.reset_index()
-            df['날짜'] = df['index'].astype(str)
-            df = df.rename(columns={"close": "현재가"})
-            price_data = df[['날짜', '현재가']].rename(columns={"현재가": "price"})
-        else:
-            df = fdr.DataReader(req.ticker, dt.datetime.now() - dt.timedelta(days=30))
-            df = df.reset_index()
-            df['날짜'] = df['Date'].astype(str)
-            df = df.rename(columns={"Close": "현재가"})
-            price_data = df[['날짜', '현재가']].rename(columns={"현재가": "price"})
-
-        return price_data.to_dict(orient="records")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/predict_price")
-def predict_price(req: StockRequest):
+@app.post("/price_and_forecast")
+def price_and_forecast(req: StockRequest):
     try:
         from prophet import Prophet
 
         today = dt.date.today()
         start = today - dt.timedelta(days=730)
 
+        # Load historical data
         if req.ticker.startswith("KRW-"):
-            df = pyupbit.get_ohlcv(req.ticker, count=730)
-            df = df.reset_index()
-            df.rename(columns={"close": "종가", "index": "날짜"}, inplace=True)
+            df_raw = pyupbit.get_ohlcv(req.ticker, count=730)
+            df_raw = df_raw.reset_index()
+            df_raw.rename(columns={"close": "종가", "index": "날짜"}, inplace=True)
         else:
-            df = fdr.DataReader(req.ticker, start)
-            df = df.reset_index()
-            df.rename(columns={"Close": "종가", "Date": "날짜"}, inplace=True)
+            df_raw = fdr.DataReader(req.ticker, start)
+            df_raw = df_raw.reset_index()
+            df_raw.rename(columns={"Close": "종가", "Date": "날짜"}, inplace=True)
 
-        data = pd.DataFrame({"ds": df['날짜'], "y": df['종가']})
+        df_raw['날짜'] = pd.to_datetime(df_raw['날짜'])
+        data = pd.DataFrame({"ds": df_raw['날짜'], "y": df_raw['종가']})
 
+        # Train model and forecast
         model = Prophet(daily_seasonality=True)
         model.fit(data)
         future = model.make_future_dataframe(periods=30)
         forecast = model.predict(future)
 
-        first_day_price = forecast.iloc[-30]['yhat']
-        last_day_price = forecast.iloc[-1]['yhat']
+        forecast = forecast[['ds', 'yhat']].tail(30).rename(columns={"ds": "date", "yhat": "predicted_price"})
+        forecast['date'] = forecast['date'].astype(str)
 
-        return {"ticker": req.ticker, "first_day_price": round(first_day_price, 2), "last_day_price": round(last_day_price, 2)}
+        # Extract recent actuals (last 30 days)
+        recent = df_raw.tail(30)[['날짜', '종가']].rename(columns={"날짜": "date", "종가": "price"})
+        recent['date'] = recent['date'].astype(str)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/predict_chart")
-def predict_chart(req: StockRequest):
-    try:
-        from prophet import Prophet
-
-        today = dt.date.today()
-        start = today - dt.timedelta(days=730)
-
-        if req.ticker.startswith("KRW-"):
-            df = pyupbit.get_ohlcv(req.ticker, count=730)
-            df = df.reset_index()
-            df.rename(columns={"close": "종가", "index": "날짜"}, inplace=True)
-        else:
-            df = fdr.DataReader(req.ticker, start)
-            df = df.reset_index()
-            df.rename(columns={"Close": "종가", "Date": "날짜"}, inplace=True)
-
-        data = pd.DataFrame({"ds": df['날짜'], "y": df['종가']})
-
-        model = Prophet(daily_seasonality=True)
-        model.fit(data)
-        future = model.make_future_dataframe(periods=30)
-        forecast = model.predict(future)
-
-        result = forecast[['ds', 'yhat']].tail(30)
-        result = result.rename(columns={"ds": "date", "yhat": "predicted_price"})
-        result['date'] = result['date'].astype(str)
-
-        return result.to_dict(orient="records")
+        return {
+            "historical": recent.to_dict(orient="records"),
+            "forecast": forecast.to_dict(orient="records")
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -187,3 +144,4 @@ def get_ohlcv(req: StockRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
