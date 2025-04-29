@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+prophet
+pandas
+yfinance
+FinanceDataReader
+pyupbit
+requests
+python-multipart
