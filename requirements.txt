@@ -3,7 +3,7 @@ uvicorn
 prophet
 pandas
 yfinance
-FinanceDataReader
+git+https://github.com/FinanceData/FinanceDataReader.git
 pyupbit
 requests
 python-multipart
