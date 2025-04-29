@@ -10,22 +10,18 @@ import requests
 import os
 import json
 
-# FastAPI 인스턴스 생성
-app = FastAPI(title="FinanceProphet API", description="Stock/Crypto Forecasting API", version="1.0")
+app = FastAPI()
 
-# 데이터 모델 정의
 class StockRequest(BaseModel):
     ticker: str
 
 class AIRequest(BaseModel):
     ticker: str
-    type: str  # "stock" or "crypto"
+    type: str
     openai_api_key: str
 
-
-# 1. 종목 검색 API
-@app.get("/search", tags=["Search"])
-async def search_stocks(market: str = "stock"):
+@app.get("/search")
+def search_stocks(market: str = "stock"):
     if market == "stock":
         kospi = fdr.StockListing("KRX")
         return kospi[['Code', 'Name']].to_dict(orient="records")
@@ -35,24 +31,28 @@ async def search_stocks(market: str = "stock"):
     else:
         raise HTTPException(status_code=400, detail="Unsupported market type.")
 
-
-# 2. 현재가 API
-@app.post("/current_price", tags=["Current Price"])
-async def get_current_price(req: StockRequest):
+@app.post("/current_price")
+def get_current_price(req: StockRequest):
     try:
-        if req.ticker.startswith("KRW-"):  # 암호화폐
-            price = pyupbit.get_current_price(req.ticker)
-        else:  # 주식
-            df = fdr.DataReader(req.ticker, dt.datetime.now() - dt.timedelta(days=5))
-            price = df['Close'].iloc[-1]
-        return {"ticker": req.ticker, "current_price": price}
+        if req.ticker.startswith("KRW-"):
+            df = pyupbit.get_ohlcv(req.ticker, count=30)
+            df = df.reset_index()
+            df['날짜'] = df['index'].astype(str)
+            df = df.rename(columns={"close": "현재가"})
+            price_data = df[['날짜', '현재가']].rename(columns={"현재가": "price"})
+        else:
+            df = fdr.DataReader(req.ticker, dt.datetime.now() - dt.timedelta(days=30))
+            df = df.reset_index()
+            df['날짜'] = df['Date'].astype(str)
+            df = df.rename(columns={"Close": "현재가"})
+            price_data = df[['날짜', '현재가']].rename(columns={"현재가": "price"})
+
+        return price_data.to_dict(orient="records")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# 3. 가격 예측 API (1일차/30일차)
-@app.post("/predict_price", tags=["Forecast"])
-async def predict_price(req: StockRequest):
+@app.post("/predict_price")
+def predict_price(req: StockRequest):
     try:
         from prophet import Prophet
 
@@ -83,10 +83,41 @@ async def predict_price(req: StockRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/predict_chart")
+def predict_chart(req: StockRequest):
+    try:
+        from prophet import Prophet
 
-# 4. AI 매매 추천 API
-@app.post("/ai_analysis", tags=["AI Analysis"])
-async def ai_analysis(req: AIRequest):
+        today = dt.date.today()
+        start = today - dt.timedelta(days=730)
+
+        if req.ticker.startswith("KRW-"):
+            df = pyupbit.get_ohlcv(req.ticker, count=730)
+            df = df.reset_index()
+            df.rename(columns={"close": "종가", "index": "날짜"}, inplace=True)
+        else:
+            df = fdr.DataReader(req.ticker, start)
+            df = df.reset_index()
+            df.rename(columns={"Close": "종가", "Date": "날짜"}, inplace=True)
+
+        data = pd.DataFrame({"ds": df['날짜'], "y": df['종가']})
+
+        model = Prophet(daily_seasonality=True)
+        model.fit(data)
+        future = model.make_future_dataframe(periods=30)
+        forecast = model.predict(future)
+
+        result = forecast[['ds', 'yhat']].tail(30)
+        result = result.rename(columns={"ds": "date", "yhat": "predicted_price"})
+        result['date'] = result['date'].astype(str)
+
+        return result.to_dict(orient="records")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/ai_analysis")
+def ai_analysis(req: AIRequest):
     try:
         if req.type == "stock":
             df = fdr.DataReader(req.ticker, dt.datetime.now() - dt.timedelta(days=120))
@@ -142,10 +173,8 @@ async def ai_analysis(req: AIRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# 5. 차트용 OHLCV 데이터 제공 API
-@app.post("/chart", tags=["Chart"])
-async def get_ohlcv(req: StockRequest):
+@app.post("/chart")
+def get_ohlcv(req: StockRequest):
     try:
         if req.ticker.startswith("KRW-"):
             df = pyupbit.get_ohlcv(req.ticker, count=365)
@@ -158,5 +187,3 @@ async def get_ohlcv(req: StockRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
