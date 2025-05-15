@@ -1,9 +1,10 @@
 fastapi
 uvicorn
-prophet
 pandas
 yfinance
-git+https://github.com/FinanceData/FinanceDataReader.git
-pyupbit
-requests
+prophet
+pandas-ta
+FinanceDataReader
+pykrx
 python-multipart
+scikit-learn
